@@ -123,8 +123,8 @@ void setup() {
 
   //pressure service and chars
   BLEService *pressService = pServer->createService(PRESSURE_SERVICE_UUID);
-  leftPressChar = pressService->createCharacteristic(LEFT_PRESS_CHAR_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
-  rightPressChar = pressService->createCharacteristic(RIGHT_PRESS_CHAR_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  leftPressChar = pressService->createCharacteristic(LEFT_PRESS_CHAR_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
+  rightPressChar = pressService->createCharacteristic(RIGHT_PRESS_CHAR_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
 
   //pressure setting service and chars
   BLEService *settingService = pServer->createService(SETTING_SERVICE_UUID);
@@ -146,6 +146,8 @@ void setup() {
   leftFillChar->addDescriptor(new BLE2902());
   rightDumpChar->addDescriptor(new BLE2902());
   rightFillChar->addDescriptor(new BLE2902());
+  leftPressChar->addDescriptor(new BLE2902());
+  rightPressChar->addDescriptor(new BLE2902());
 
 
   leftSettingChar->setCallbacks(new CharacteristicCallback());
@@ -204,6 +206,10 @@ void loop() {
   Serial.println(rtPress);
   leftPressChar->setValue(leftPress);
   rightPressChar->setValue(rtPress);
+  leftPressChar->notify();
+  delay(5);
+  rightPressChar->notify();
+  delay(5);
   if (manualMode == 0) {
     Serial.println("auto mode");
     //relays energize when LOW signal (grounded out)
