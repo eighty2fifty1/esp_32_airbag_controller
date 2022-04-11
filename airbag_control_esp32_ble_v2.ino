@@ -1,3 +1,4 @@
+#include <RunningAverage.h>
 #include <EEPROM.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -23,6 +24,7 @@
 
 #define EEPROM_SIZE 2
 
+#define READING_NUM 5
 using namespace std;
 
 //EEPROM placeholders
@@ -31,11 +33,13 @@ int rtPlace;
 int eeAddr = 0;
 
 //pin setup
-int leftDump = 15;  //purple, relay 1
-int relay = 2;  //blue, relay 2
-int leftFill = 4; //green, relay 4
-int rtFill = 16;  //yellow, relay 7
-int rtDump = 17;  //orange, relay 8
+int leftDump = 4 ;  //purple, relay 1
+int relay = 16;  //blue, relay 2
+int leftFill = 17; //green, relay 4
+int rtFill = 5;  //yellow, relay 7
+int rtDump = 18;  //orange, relay 8
+
+int blueLed = 2;  //blue LED
 
 int leftRaw;  //pin 32
 int rtRaw;  //pin 33
@@ -52,6 +56,12 @@ int sol;
 int manualMode = 0;
 int manualPump = 0;
 
+//average press readings for smoothing input
+RunningAverage leftAvg(READING_NUM);
+RunningAverage rightAvg(READING_NUM);
+
+BLEServer *pServer;
+
 //BLE characteristics
 BLECharacteristic *leftPressChar;
 BLECharacteristic *rightPressChar;
@@ -66,6 +76,9 @@ BLECharacteristic *rightDumpChar;
 BLECharacteristic *rightFillChar;
 
 bool deviceConnected = false;
+bool oldDeviceConnected = false;
+
+String leftSettingString, rightSettingString;
 
 //function prototypes
 void saveSettings(int, int);
@@ -74,10 +87,12 @@ void saveSettings(int, int);
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
+      digitalWrite(blueLed, HIGH);
     };
 
     void onDisconnect(BLEServer* pServer) {
       deviceConnected = false;
+      digitalWrite(blueLed, LOW);
     }
 };
 
@@ -101,7 +116,7 @@ class ModeCharacteristicCallback : public BLECharacteristicCallbacks {
 
 
     void onWrite(BLECharacteristic *characteristic_) {
-      Serial.println("characteristic changed");
+      Serial.println("mode characteristic changed");
       modeSetting = characteristic_->getValue().c_str();
       int manualModeTest = modeSetting.toInt();
 
@@ -115,10 +130,30 @@ class ModeCharacteristicCallback : public BLECharacteristicCallbacks {
     }
 };
 
+class ManualCharacteristicCallback : public BLECharacteristicCallbacks {
+    String modeSetting;
+
+
+    void onWrite(BLECharacteristic *characteristic_) {
+      Serial.println("manual characteristic changed");
+      modeSetting = characteristic_->getValue().c_str();
+      int manualModeTest = modeSetting.toInt();
+
+      if (manualModeTest == 1) {
+        manualPump = 1;
+        Serial.println("turning pump on");
+      }
+      else {
+        manualPump = 0;
+        Serial.println("turning pump off");
+      }
+
+    }
+};
 void setup() {
   //Bluetooth Setup
   BLEDevice::init("Airbag Controller");
-  BLEServer *pServer = BLEDevice:: createServer();
+  pServer = BLEDevice:: createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
   //pressure service and chars
@@ -131,11 +166,11 @@ void setup() {
   leftSettingChar = settingService->createCharacteristic(LEFT_SETTING_CHAR_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
   rightSettingChar = settingService->createCharacteristic(RIGHT_SETTING_CHAR_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
   modeSettingChar = settingService->createCharacteristic(MODE_CHAR_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE);
+  pumpStatusChar = settingService->createCharacteristic(PUMP_CONT_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
 
 
   //status service and chars
   BLEService *statusService = pServer->createService(STATUS_SERVICE_UUID);
-  pumpStatusChar = statusService->createCharacteristic(PUMP_CONT_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
   leftDumpChar = statusService->createCharacteristic(LEFT_DUMP_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
   leftFillChar = statusService->createCharacteristic(LEFT_FILL_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
   rightDumpChar = statusService->createCharacteristic(RIGHT_DUMP_UUID, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_NOTIFY);
@@ -153,6 +188,7 @@ void setup() {
   leftSettingChar->setCallbacks(new CharacteristicCallback());
   rightSettingChar->setCallbacks(new CharacteristicCallback());
   modeSettingChar->setCallbacks(new ModeCharacteristicCallback());
+  pumpStatusChar->setCallbacks(new ManualCharacteristicCallback());
 
   pressService->start();
   settingService->start();
@@ -172,6 +208,8 @@ void setup() {
   pinMode(rtFill, OUTPUT);
   pinMode(leftDump, OUTPUT);
   pinMode(rtDump, OUTPUT);
+  pinMode(blueLed, OUTPUT);
+  digitalWrite(blueLed, LOW);
 
   //serial setup
   Serial.begin(115200);        //for debugging, won't be used in normal ops  //MySerial.begin(19200);
@@ -187,19 +225,36 @@ void setup() {
   //input validation of eeprom values
   if ((lPlace > 5) && (lPlace < 90)) {
     leftSet = lPlace;
+    leftSettingString = String(leftSet);
+    leftSettingChar->setValue(leftSettingString.c_str());
+    Serial.print("initial left setting: ");
+    Serial.println(leftSet);
   }
 
   if ((rtPlace > 5) && (rtPlace < 90)) {
     rtSet = rtPlace;
+    rightSettingString = String(rtSet);
+    rightSettingChar->setValue(String(rtSet).c_str());
+    Serial.print("initial right setting");
+    Serial.println(rtSet);
+  }
+
+  //populate queues for averages
+  for(int i = 0; i < READING_NUM; i++) {
+    leftAvg.addValue(analogRead(32));
+    rightAvg.addValue(analogRead(33));
   }
 }
 
 void loop() {
+  checkToReconnect();
   //pressure read
-  leftRaw = analogRead(32);
-  rtRaw = analogRead(33);
-  Serial.println(leftRaw);
-  Serial.println(rtRaw);
+  leftRaw = averageReadings(analogRead(32), 'L');
+  rtRaw = averageReadings(analogRead(33), 'R');
+  //Serial.print("left avg: ");
+  //Serial.println(leftRaw);
+  //Serial.print("right avg");
+  //Serial.println(rtRaw);
   leftPress = pressureConvert(leftRaw);
   rtPress = pressureConvert(rtRaw);
   Serial.println(leftPress);
@@ -211,7 +266,7 @@ void loop() {
   rightPressChar->notify();
   delay(5);
   if (manualMode == 0) {
-    Serial.println("auto mode");
+    //Serial.println("auto mode");
     //relays energize when LOW signal (grounded out)
     //fill left
     if (leftPress < (leftSet + 5)) {
@@ -229,7 +284,7 @@ void loop() {
         leftDumpChar->setValue(sol);
         leftDumpChar->notify();
         delay(5);
-        Serial.println("Left airbag filling");
+        //Serial.println("Left airbag filling");
       }
     }
     //dump left
@@ -246,7 +301,7 @@ void loop() {
         leftFillChar->notify();
         delay(5);
         leftPumpNeeded = false;
-        Serial.println("Left airbag dumping");
+        //Serial.println("Left airbag dumping");
       }
     }
     //idle
@@ -261,7 +316,7 @@ void loop() {
       leftFillChar->notify();
       delay(5);
       leftPumpNeeded = false;
-      Serial.println("left solenoids closed");
+      //Serial.println("left solenoids closed");
     }
 
     //fill right
@@ -278,7 +333,7 @@ void loop() {
         rightDumpChar->setValue(sol);
         rightDumpChar->notify();
         delay(5);
-        Serial.println("Right airbag filling");
+        //Serial.println("Right airbag filling");
       }
     }
     //dump right
@@ -295,7 +350,7 @@ void loop() {
         rightFillChar->notify();
         delay(5);
         rightPumpNeeded = false;
-        Serial.println("Right airbag dumping");
+        //Serial.println("Right airbag dumping");
       }
     }
 
@@ -311,7 +366,7 @@ void loop() {
       rightDumpChar->notify();
       delay(5);
       rightPumpNeeded = false;
-      Serial.println("right solenoids closed");
+      //Serial.println("right solenoids closed");
     }
     //turn off pump
     pumpNeeded(leftPumpNeeded, rightPumpNeeded);
@@ -319,7 +374,7 @@ void loop() {
 
   //manual pump control for filling tires
   else if (manualMode == 1) {
-    Serial.println("manual mode");
+    //Serial.println("manual mode");
     //closes all solenoids
     digitalWrite(leftFill, HIGH);
     digitalWrite(leftDump, HIGH);
@@ -396,4 +451,40 @@ void pumpNeeded(bool left, bool right) {
   pumpStatusChar->setValue(pumpSol);
   pumpStatusChar->notify();
   delay(5);
+}
+
+void checkToReconnect() {
+  if (!deviceConnected && oldDeviceConnected) {
+    delay(500);
+    pServer->startAdvertising();
+    Serial.println("Disconnected...start advertising");
+    oldDeviceConnected = deviceConnected;
+  }
+
+  if (deviceConnected && !oldDeviceConnected) {
+    Serial.println("reconnected");
+    oldDeviceConnected = deviceConnected;
+  }
+}
+
+int averageReadings(int input, char side) {
+  
+  
+  if (side == 'L') {
+    Serial.print("left input: ");
+    Serial.println(input);
+    leftAvg.addValue(input);
+    return (int) leftAvg.getAverage();
+  }
+
+  else if (side == 'R') {
+    Serial.print("right input: ");
+    Serial.println(input);
+    rightAvg.addValue(input);
+    return (int) rightAvg.getAverage();
+  }
+
+  else {
+    return 0;
+  }
 }
