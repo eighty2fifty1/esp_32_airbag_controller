@@ -24,7 +24,7 @@
 
 #define EEPROM_SIZE 2
 
-#define READING_NUM 5
+#define READING_NUM 15
 using namespace std;
 
 //EEPROM placeholders
@@ -36,8 +36,8 @@ int eeAddr = 0;
 int leftDump = 4 ;  //purple, relay 1
 int relay = 16;  //blue, relay 2
 int leftFill = 17; //green, relay 4
-int rtFill = 5;  //yellow, relay 7
-int rtDump = 18;  //orange, relay 8
+int rtFill = 18;  //yellow, relay 7
+int rtDump = 19;  //orange, relay 8
 
 int blueLed = 2;  //blue LED
 
@@ -84,6 +84,7 @@ String leftSettingString, rightSettingString;
 void saveSettings(int, int);
 
 //BLE callbacks
+//lights up blue led whenever bluetooth is connected
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
       deviceConnected = true;
@@ -151,6 +152,20 @@ class ManualCharacteristicCallback : public BLECharacteristicCallbacks {
     }
 };
 void setup() {
+  //pin settings
+  pinMode(relay, OUTPUT);
+  pinMode(leftFill, OUTPUT);
+  pinMode(rtFill, OUTPUT);
+  pinMode(leftDump, OUTPUT);
+  pinMode(rtDump, OUTPUT);
+  pinMode(blueLed, OUTPUT);
+  digitalWrite(relay, HIGH);
+  digitalWrite(leftFill, HIGH);
+  digitalWrite(rtFill, HIGH);
+  digitalWrite(leftDump, HIGH);
+  digitalWrite(rtDump, HIGH);
+  digitalWrite(blueLed, LOW);
+  
   //Bluetooth Setup
   BLEDevice::init("Airbag Controller");
   pServer = BLEDevice:: createServer();
@@ -202,14 +217,7 @@ void setup() {
   pAdvertising->setMinPreferred(0x12);
   BLEDevice::startAdvertising();
 
-  //pin settings
-  pinMode(relay, OUTPUT);
-  pinMode(leftFill, OUTPUT);
-  pinMode(rtFill, OUTPUT);
-  pinMode(leftDump, OUTPUT);
-  pinMode(rtDump, OUTPUT);
-  pinMode(blueLed, OUTPUT);
-  digitalWrite(blueLed, LOW);
+
 
   //serial setup
   Serial.begin(115200);        //for debugging, won't be used in normal ops  //MySerial.begin(19200);
